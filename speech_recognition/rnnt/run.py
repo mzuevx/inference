@@ -76,8 +76,9 @@ def main():
     log_settings = lg.LogSettings()
     log_settings.log_output = log_output_settings
 
-    print("Running Loadgen test...")
-    lg.StartTestWithLogSettings(sut.sut, sut.qsl.qsl, settings, log_settings)
+    # print("Running Loadgen test...")
+    # lg.StartTestWithLogSettings(sut.sut, sut.qsl.qsl, settings, log_settings)
+    sut.issue_queries(list(sut.qsl.sample_id_to_sample.values()))
 
     if args.accuracy:
         cmd = f"python3 accuracy_eval.py --log_dir {log_path} --dataset_dir {args.dataset_dir} --manifest {args.manifest}"

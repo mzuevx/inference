@@ -8,7 +8,7 @@ from parts.segment import AudioSegment
 import numpy as np
 
 import mlperf_loadgen as lg
-
+from pathlib import Path
 
 class AudioQSL:
     def __init__(self, dataset_dir, manifest_filepath, labels,
@@ -39,7 +39,8 @@ class AudioQSL:
 
     def _load_sample(self, index):
         sample = self.manifest[index]
-        segment = AudioSegment.from_file(sample['audio_filepath'][0],
+        fname = Path(sample['audio_filepath'][0])
+        segment = AudioSegment.from_file(str(fname),
                                          target_sr=self.sample_rate)
         waveform = segment.samples
         assert isinstance(waveform, np.ndarray) and waveform.dtype == np.float32

@@ -28,7 +28,7 @@ from decoders import ScriptGreedyDecoder
 from helpers import add_blank_label
 from preprocessing import AudioPreprocessing
 from model_separable_rnnt import RNNT
-
+import torch.onnx
 
 def load_and_migrate_checkpoint(ckpt_path):
     checkpoint = torch.load(ckpt_path, map_location="cpu")
@@ -68,25 +68,33 @@ class PytorchSUT:
             rnnt=config['rnnt'],
             num_classes=len(rnnt_vocab)
         )
+
+        model.configure_decoder(len(rnnt_vocab) - 1)
+
         model.load_state_dict(load_and_migrate_checkpoint(checkpoint_path),
                               strict=True)
-        model.eval()
-        model.encoder = torch.jit.script(model.encoder)
-        model.encoder = torch.jit._recursive.wrap_cpp_module(
-            torch._C._freeze_module(model.encoder._c))
-        model.prediction = torch.jit.script(model.prediction)
-        model.prediction = torch.jit._recursive.wrap_cpp_module(
-            torch._C._freeze_module(model.prediction._c))
-        model.joint = torch.jit.script(model.joint)
-        model.joint = torch.jit._recursive.wrap_cpp_module(
-            torch._C._freeze_module(model.joint._c))
-        model = torch.jit.script(model)
 
-        self.greedy_decoder = ScriptGreedyDecoder(len(rnnt_vocab) - 1, model)
+
+        model.configure_decoder(len(rnnt_vocab) - 1)
+        model.eval()
+        # model.encoder = torch.jit.script(model.encoder)
+        # model.encoder = torch.jit._recursive.wrap_cpp_module(
+        #     torch._C._freeze_module(model.encoder._c))
+        # model.prediction = torch.jit.script(model.prediction)
+        # model.prediction = torch.jit._recursive.wrap_cpp_module(
+        #     torch._C._freeze_module(model.prediction._c))
+        # model.joint = torch.jit.script(model.joint)
+        # model.joint = torch.jit._recursive.wrap_cpp_module(
+        #     torch._C._freeze_module(model.joint._c))
+        # model = torch.jit.script(model)
+        self.model = model
+
+        # self.greedy_decoder = ScriptGreedyDecoder(len(rnnt_vocab) - 1, model)
 
     def issue_queries(self, query_samples):
         for query_sample in query_samples:
-            waveform = self.qsl[query_sample.index]
+            # waveform = self.qsl[query_sample.index]
+            waveform = query_sample
             assert waveform.ndim == 1
             waveform_length = np.array(waveform.shape[0], dtype=np.int64)
             waveform = np.expand_dims(waveform, 0)
@@ -99,8 +107,24 @@ class PytorchSUT:
                 assert feature_length.ndim == 1
                 feature = feature.permute(2, 0, 1)
 
-                _, _, transcript = self.greedy_decoder.forward(feature, feature_length)
+                logits, logits_len, probs, transcript = self.model(feature, feature_length)
+                # logits, logits_len, transcript = self.model(feature, feature_length)
+                # _, _, transcript = self.greedy_decoder.forward(feature, feature_length)
 
+                torch.onnx.export(self.model, (feature, feature_length), "export\\rnnt.onnx",
+                                  input_names=['input'],
+                                  output_names=['logits', 'logits_len', 'probs', 'transcript'],
+                                  opset_version = 12,
+                                  verbose = True,
+                                  use_external_data_format=True,
+                                  dynamic_axes = {'input': {0: 'feature_len', 1: 'batch_size'},
+                                                  'logits': {0: 'batch_size', 1: 'half_feature_len'},
+                                                  'probs': {0: 'batch_size', 1: 'prob_len'},
+                                                  'transcript': {0: 'batch_size', 1: 'transcript_len'}}
+                                  )
+            print("ONNX export finished")
+            import sys
+            sys.exit()
             assert len(transcript) == 1
             response_array = array.array('q', transcript[0])
             bi = response_array.buffer_info()

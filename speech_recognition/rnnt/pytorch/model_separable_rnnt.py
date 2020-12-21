@@ -6,6 +6,8 @@ import torch
 from rnn import rnn
 from rnn import StackTime
 
+import torch.nn.functional as F
+from typing import List, Optional, Tuple
 
 class RNNT(torch.nn.Module):
     def __init__(self, rnnt=None, num_classes=1, **kwargs):
@@ -48,9 +50,85 @@ class RNNT(torch.nn.Module):
             rnnt["dropout"],
         )
 
-    def forward(self, x_padded: torch.Tensor, x_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.encoder(x_padded, x_lens)
-        
+        self.decoder = None
+
+    def configure_decoder(self, blank_index, max_symbols_per_step=30):
+        self._blank_id = blank_index
+        self._SOS = -1
+        assert max_symbols_per_step > 0
+        self._max_symbols_per_step = max_symbols_per_step
+
+    def forward(self, x_padded: torch.Tensor, x_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, logits_lens = self.encoder(x_padded, x_lens)
+
+        output: List[List[int]] = []
+        probs: List[torch.Tensor] = []
+
+        for batch_idx in range(logits.size(0)):
+            inseq = logits[batch_idx, :, :].unsqueeze(1)
+            # inseq: TxBxF
+            logitlen = logits_lens[batch_idx]
+            sentence, logprobs = self._greedy_decode(inseq, logitlen)
+            output.append(sentence)
+            probs.append(logprobs.unsqueeze(0))
+
+        output = torch.IntTensor(output)
+        probs = torch.cat(probs)
+
+        return logits, logits_lens, probs, output
+        # return logits, logits_lens, output
+
+    def _greedy_decode(self, x: torch.Tensor, out_len: torch.Tensor) -> Tuple[List[int], torch.Tensor]:
+        hidden: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        label: List[int] = []
+        logprobs: List[torch.Tensor] = []
+
+        for time_idx in range(int(out_len.item())):
+            f = x[time_idx, :, :].unsqueeze(0)
+
+            not_blank = True
+            symbols_added = 0
+
+            while not_blank and symbols_added < self._max_symbols_per_step:
+                g, hidden_prime = self._pred_step(
+                    self._get_last_symb(label),
+                    hidden
+                )
+                logp = self._joint_step(f, g, log_normalize=False)[0, :]
+                logprobs.append(logp.unsqueeze(0))
+                # get index k, of max prob
+                v, k = logp.max(0)
+                k = k.item()
+
+                if k == self._blank_id:
+                    not_blank = False
+                else:
+                    label.append(k)
+                    hidden = hidden_prime
+                symbols_added += 1
+
+        logprobs = torch.cat(logprobs)
+        return label, logprobs
+
+    def _pred_step(self, label: int, hidden: Optional[Tuple[torch.Tensor, torch.Tensor]]) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        if label == self._SOS:
+            return self.prediction(None, hidden)
+        if label > self._blank_id:
+            label -= 1
+        label = torch.tensor([[label]], dtype=torch.int64)
+        return self.prediction(label, hidden)
+
+    def _joint_step(self, enc: torch.Tensor, pred: torch.Tensor, log_normalize: bool=False) -> torch.Tensor:
+        logits = self.joint(enc, pred)[:, 0, 0, :]
+        if not log_normalize:
+            return logits
+
+        probs = F.log_softmax(logits, dim=len(logits.shape) - 1)
+
+        return probs
+
+    def _get_last_symb(self, labels: List[int]) -> int:
+        return self._SOS if len(labels) == 0 else labels[-1]
 
 class Encoder(torch.nn.Module):
     def __init__(self, in_features, encoder_n_hidden,

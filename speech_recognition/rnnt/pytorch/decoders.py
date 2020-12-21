@@ -36,7 +36,7 @@ class ScriptGreedyDecoder(torch.nn.Module):
 
     def __init__(self, blank_index, model, max_symbols_per_step=30):
         super().__init__()
-        assert isinstance(model, torch.jit.ScriptModule)
+        # assert isinstance(model, torch.jit.ScriptModule)
         # assert not model.training
         self.eval()
         self._model = model
@@ -51,7 +51,7 @@ class ScriptGreedyDecoder(torch.nn.Module):
 
         Args:
             x: A tensor of size (batch, channels, features, seq_len)
-                TODO was (seq_len, batch, in_features).
+                TODO was (seq_len, batch,in_features).
             out_lens: list of int representing the length of each sequence
                 output sequence.
 
